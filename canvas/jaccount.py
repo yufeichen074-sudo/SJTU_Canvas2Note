@@ -17,7 +17,7 @@ import requests
 import websocket
 from dataclasses import dataclass, field
 from typing import Optional, Callable
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 
 @dataclass
@@ -29,6 +29,7 @@ class QRLoginSession:
     cookie_str: str = ""
     _ws: Optional[websocket.WebSocket] = field(default=None, repr=False)
     _ws_thread: Optional[threading.Thread] = field(default=None, repr=False)
+    _http: Optional[requests.Session] = field(default=None, repr=False)
 
 
 def _follow_redirects(sess, start_url, max_hops=10):
@@ -39,7 +40,7 @@ def _follow_redirects(sess, start_url, max_hops=10):
             return r
         if "Location" not in r.headers:
             break
-        url = r.headers["Location"]
+        url = urljoin(r.url, r.headers["Location"])
     return r
 
 
@@ -112,6 +113,7 @@ def get_qr_code() -> Optional[QRLoginSession]:
             qr_url=qr_url,
             cookies=cookie_dict,
             _ws=ws,
+            _http=sess,
         )
 
         # Start background listener for LOGIN / ERROR messages
@@ -125,7 +127,6 @@ def get_qr_code() -> Optional[QRLoginSession]:
                         msg_type = msg.get("type", "")
 
                         if msg_type == "LOGIN":
-                            session.status = "confirmed"
                             # JS does: window.location.href = "expresslogin?uuid=xxx"
                             redirect_url = (
                                 f"https://jaccount.sjtu.edu.cn/jaccount/"
@@ -133,6 +134,7 @@ def get_qr_code() -> Optional[QRLoginSession]:
                             )
                             # Follow redirect to get final cookies
                             _complete_login(session, redirect_url, cookie_dict)
+                            session.status = "confirmed" if session.cookie_str else "error"
                             break
 
                         elif msg_type == "SCANNED":
@@ -170,9 +172,10 @@ def _complete_login(session: QRLoginSession, redirect_url: str, cookies: dict):
     expresslogin redirects through jAccount to courses.sjtu.edu.cn OAuth callback.
     We follow the full chain and extract JAAuthCookie as used by video_client.
     """
-    sess = requests.Session()
-    for k, v in cookies.items():
-        sess.cookies.set(k, v)
+    sess = session._http or requests.Session()
+    if session._http is None:
+        for k, v in cookies.items():
+            sess.cookies.set(k, v)
     sess.headers.update({
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     })
@@ -183,7 +186,7 @@ def _complete_login(session: QRLoginSession, redirect_url: str, cookies: dict):
         for _ in range(10):
             r = sess.get(url, timeout=15, allow_redirects=False)
             if r.status_code in (301, 302, 303, 307, 308) and "Location" in r.headers:
-                url = r.headers["Location"]
+                url = urljoin(r.url, r.headers["Location"])
             else:
                 break
 
@@ -207,12 +210,10 @@ def _complete_login(session: QRLoginSession, redirect_url: str, cookies: dict):
             ja_auth = cookie_dict.get("JAAuthCookie", "")
 
         # Use JAAuthCookie value directly (what video_client expects)
-        session.cookie_str = ja_auth if ja_auth else "; ".join(
-            f"{k}={v}" for k, v in cookie_dict.items()
-        )
+        session.cookie_str = ja_auth
 
-    except requests.RequestException:
-        pass
+    except requests.RequestException as exc:
+        print(f"[QR login] redirect failed: {type(exc).__name__}", flush=True)
 
 
 def check_qr_status(session: QRLoginSession) -> QRLoginSession:

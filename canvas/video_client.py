@@ -943,4 +943,5 @@ class SJTUOldVideoClient:
 
 
 # Alias for backward compat with code that imports VideoClient
-VideoClient = SJTUVideoClient
+from .video_current import CurrentVideoClient
+VideoClient = CurrentVideoClient

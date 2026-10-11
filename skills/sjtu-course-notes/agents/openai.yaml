@@ -1,0 +1,4 @@
+interface:
+  display_name: "交大课程笔记"
+  short_description: "通过 Edge 获取交大课程材料，整理四部分笔记、例题证明及对应板书截图"
+  default_prompt: "使用 $sjtu-course-notes 整理 Edge 当前交大课程，保存四部分课堂笔记并附对应板书截图。"

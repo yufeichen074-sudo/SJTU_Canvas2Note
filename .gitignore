@@ -18,3 +18,6 @@ VibeVoice/
 batch_german.py
 clash-for-linux-install/
 *.md.tmp
+work/
+server.pid
+server.*.log

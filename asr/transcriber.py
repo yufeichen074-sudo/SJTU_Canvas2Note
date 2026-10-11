@@ -2,14 +2,15 @@
 语音转写：支持 translate.sjtu.edu.cn（交大 AI 转录）、本地 faster-whisper、Qwen3-ASR 和 OpenAI 兼容 ASR API
 """
 import os
-import torch
 import subprocess
 import importlib
+import site
 from pathlib import Path
 from config import AUDIO_DIR
 
 _model = None
 _qwen_model = None
+_dll_handles = []
 
 
 def _reload():
@@ -46,7 +47,7 @@ def _gpu_info():
     if not free_mem:
         return "cpu", -1
     idx = free_mem.index(max(free_mem))
-    return f"cuda:{idx}", idx if max(free_mem) >= 6000 else -1
+    return (f"cuda:{idx}", idx) if max(free_mem) >= 6000 else ('cpu', -1)
 
 
 # ── faster-whisper ─────────────────────────────────────────────────────────────
@@ -59,11 +60,16 @@ def _load_whisper():
     cfg = _cfg()
     compute = "float16" if device.startswith("cuda") else "int8"
     from faster_whisper import WhisperModel
+    if device.startswith('cuda') and os.name == 'nt':
+        dirs = [p for folder in site.getsitepackages() for p in (Path(folder) / 'nvidia').glob('*/bin')]
+        _dll_handles.extend(os.add_dll_directory(str(p.resolve())) for p in dirs)
+        os.environ['PATH'] = ';'.join(str(p.resolve()) for p in dirs) + ';' + os.environ['PATH']
     print(f"[ASR] 加载 faster-whisper {cfg['asr_model']} on {device} ...")
     kw = {} if idx < 0 else {"device_index": idx}
     _model = WhisperModel(cfg["asr_model"],
                           device="cuda" if device.startswith("cuda") else "cpu",
-                          compute_type=compute, **kw)
+                          compute_type=compute, cpu_threads=cfg.get('asr_cpu_threads', 8),
+                          download_root=cfg.get('asr_model_cache') or str(Path(__file__).parent.parent / 'work' / 'models'), **kw)
     print("[ASR] 模型加载完成")
     return _model
 
@@ -74,8 +80,12 @@ def _transcribe_whisper(audio_path: str | os.PathLike) -> str:
     language = None if lang == "auto" else lang
     print(f"[ASR] 转录: {Path(audio_path).name} (lang={language or 'auto'})")
     model = _load_whisper()
-    segments, _ = model.transcribe(str(audio_path), language=language, beam_size=5)
-    text = "".join(s.text for s in segments).strip()
+    from faster_whisper import BatchedInferencePipeline
+    segments, _ = BatchedInferencePipeline(model=model).transcribe(str(audio_path), language=language, beam_size=5, batch_size=8, vad_filter=True)
+    def stamp(t):
+        t = int(t)
+        return f'{t//3600:02}:{t//60%60:02}:{t%60:02}'
+    text = '\n'.join(f'[{stamp(s.start)}–{stamp(s.end)}] {s.text.strip()}' for s in segments)
     print(f"[ASR] 完成，字符数: {len(text)}")
     return text
 
@@ -117,6 +127,7 @@ def _transcribe_translate(audio_or_video_path: str | os.PathLike) -> str:
 # ── Qwen3-ASR ───────────────────────────────────────────────────────────────────
 
 def _load_qwen3():
+    import torch
     global _qwen_model
     if _qwen_model is not None:
         return _qwen_model
@@ -281,6 +292,8 @@ def transcribe(audio_path: str | os.PathLike, course_name: str = "") -> str:
 
 
 def transcribe_video(video_path: Path, course_name: str = "") -> str:
+    if _cfg().get('asr_engine') == 'faster-whisper':
+        return transcribe(video_path, course_name)
     audio_path = extract_audio(video_path, course_name)
     return transcribe(audio_path, course_name)
 

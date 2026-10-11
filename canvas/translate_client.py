@@ -113,7 +113,7 @@ class TranslateClient:
         self.session.headers["Cookie"] = cookie_header
 
     def is_authenticated(self) -> bool:
-        r = self.session.get(f"{TRANSLATE_BASE}/ui/transcribe", verify=False, timeout=15)
+        r = self.session.get(f"{TRANSLATE_BASE}/ui/transcribe", verify=True, timeout=15)
         return r.status_code == 200 and "jaccount" not in r.url.lower()
 
     def upload(self, file_path: str | Path) -> str:
@@ -134,7 +134,7 @@ class TranslateClient:
             r = self.session.post(
                 UPLOAD_URL,
                 files={"file": (path.name, f, mime_map.get(suffix, "application/octet-stream"))},
-                verify=False, timeout=300,
+                verify=True, timeout=300,
             )
         if r.status_code == 401:
             raise Exception("上传 HTTP 401: Cookie 已失效，请重新登录 translate.sjtu.edu.cn")
@@ -147,7 +147,7 @@ class TranslateClient:
         return Path(data["data"]).stem
 
     def list_files(self) -> list[TranscribeFile]:
-        r = self.session.get(LIST_URL, verify=False, timeout=15)
+        r = self.session.get(LIST_URL, verify=True, timeout=15)
         if r.status_code == 401:
             raise Exception("文件列表 HTTP 401: Cookie 已失效")
         data = r.json()
@@ -187,7 +187,7 @@ class TranslateClient:
         r = self.session.post(
             DELETE_URL,
             data={"id": file_id},
-            verify=False, timeout=15,
+            verify=True, timeout=15,
         )
         if r.status_code != 200:
             raise Exception(f"删除失败 HTTP {r.status_code}: {r.text[:200]}")

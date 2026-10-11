@@ -78,8 +78,23 @@ def make_task(kind: str) -> str:
 # API — Courses
 # ═══════════════════════════════════════════════════════════════════════════════
 
+_canvas_session_client = None
+_canvas_session_key = None
+
 def canvas() -> CanvasClient:
+    global _canvas_session_client, _canvas_session_key
     cfg = _cfg()
+    if not cfg["canvas_token"] and cfg.get("ja_auth_cookie"):
+        key = (cfg["canvas_base_url"], cfg["ja_auth_cookie"])
+        if _canvas_session_client is None or key != _canvas_session_key:
+            from canvas.video_client import VideoClient
+            vc = VideoClient(ja_auth_cookie=cfg["ja_auth_cookie"])
+            if not vc.login_canvas_website():
+                raise HTTPException(401, "扫码登录已过期，请重新登录")
+            client = CanvasClient(base_url=cfg["canvas_base_url"])
+            client.session = vc.session
+            _canvas_session_client, _canvas_session_key = client, key
+        return _canvas_session_client
     return CanvasClient(base_url=cfg["canvas_base_url"], token=cfg["canvas_token"])
 
 
@@ -312,6 +327,15 @@ def list_video_videos(course_id: int):
     return vc.list_course_videos(course_id)
 
 
+@app.get('/api/video/plays')
+def video_plays(video_id: str, course_id: int, title: str = ''):
+    from canvas.video_client import VideoClient
+    vc = VideoClient(ja_auth_cookie=_cfg().get('ja_auth_cookie', ''))
+    vc.bind_canvas_course(course_id)
+    info = vc.get_video_info(video_id, title)
+    return [{'id': p.id, 'name': p.name, 'index': p.index, 'url': ''} for p in info.plays]
+
+
 @app.get("/api/video/courses/{course_id}/live")
 def list_live_streams(course_id: int):
     """List live streams using the old video client (External Tool 9487)."""
@@ -346,8 +370,12 @@ def _do_video_download(tid: str, body: dict, cookie: str):
         from canvas.video_client import VideoClient
         cfg = _cfg()
         vc = VideoClient(ja_auth_cookie=cookie)
-        await vc.login()
+        if not vc.login():
+            tasks[tid]["status"] = "error"
+            tasks[tid]["error"] = "视频平台登录失败，请重新登录"
+            return
         course_id = body["course_id"]
+        vc.bind_canvas_course(course_id)
         course_name = body["course_name"]
         video_id = body["video_id"]
         title = body.get("title", video_id)
@@ -355,10 +383,17 @@ def _do_video_download(tid: str, body: dict, cookie: str):
         out_dir = DOWNLOAD_DIR / course_name
         out_dir.mkdir(parents=True, exist_ok=True)
         tasks[tid]["status"] = "downloading"
-        await vc.download_video(video_id, out_dir / f"{title}.mp4", title=title, play_index=play_index or -1)
+        def progress(p):
+            tasks[tid]['progress'] = p.processed
+            tasks[tid]['total'] = p.total
+        vc.download_video(video_id, out_dir / f"{_safe_name(title)}.mp4", title=title, play_index=play_index if play_index is not None else -1, progress_handler=progress)
         tasks[tid]["status"] = "done"
         tasks[tid]["result"] = f"Downloaded: {title}"
-    asyncio.run(_run())
+    try:
+        asyncio.run(_run())
+    except Exception as e:
+        tasks[tid]['status'] = 'error'
+        tasks[tid]['error'] = type(e).__name__ + ': recording download failed'
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -412,7 +447,7 @@ def _do_batch_transcribe(tid: str, items: list[dict], delete_video: bool):
                 out_dir = DOWNLOAD_DIR / course_name
                 out_dir.mkdir(parents=True, exist_ok=True)
                 vc.bind_canvas_course(item["course_id"])
-                save_path = out_dir / f"{title}.mp4"
+                save_path = out_dir / f"{_safe_name(title)}.mp4"
                 video_path = str(vc.download_video(video_id, save_path, title=title, play_index=play_index))
                 tasks[tid]["items"] = updated_items + [{"title": title, "status": "↓"}]
                 # Transcribe

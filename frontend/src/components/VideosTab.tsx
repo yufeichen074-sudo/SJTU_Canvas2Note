@@ -613,10 +613,10 @@ export function VideosTab({
                   className="w-full text-left px-5 py-3 flex items-center gap-3 hover:bg-surface2 transition-colors"
                 >
                   <Badge variant={play.index === 0 ? 'default' : 'muted'}>
-                    {play.index === 0 ? 'Main' : 'Screen'}
+                    {`Track ${play.index}`}
                   </Badge>
                   <span className="text-xs text-text">
-                    {play.index === 0 ? 'Blackboard / PPT main screen' : 'Computer screen recording'}
+                    {play.name}
                   </span>
                 </button>
               ))}
